@@ -16,16 +16,16 @@
 EXE:=omp-sph cuda-sph
 CFLAGS+=-std=c99 -Wall -Wpedantic
 LDLIBS=-lm
-BUILDDIR = build
+BUILDDIR = ../build
 
 .PHONY: clean
 
-omp-sph: sph.c
-	$(CC) $<  $(LDLIBS) -o $(BUILDDIR)/$@
+omp-sph: omp-sph.c
+	$(CC) $(CFLAGS) $< $(LDLIBS) -fopenmp -o $(BUILDDIR)/$@
 
 all: $(EXE)
 
-cuda-sph: sph.c
+cuda-sph: cuda-sph.c
 	$(CC) $(CFLAGS) $< $(LDLIBS) -o $(BUILDDIR)/$@
 
 clean:

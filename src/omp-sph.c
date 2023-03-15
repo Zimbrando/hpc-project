@@ -32,6 +32,7 @@
 #include <stdlib.h>
 #include <math.h>
 #include <assert.h>
+#include <omp.h>
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
@@ -50,16 +51,10 @@ const float VISC = 200;         // viscosity constant
 const float DT = 0.0007;        // integration timestep
 const float BOUND_DAMPING = -0.5;
 
-// rendering projection parameters
-// (the following ought to be "const float", but then the compiler
-// would give an error because VIEW_WIDTH and VIEW_HEIGHT are
-// initialized with non-literal expressions)
-
-const int MAX_PARTICLES = 20000;
-// Larger window size to accommodate more particles
 #define WINDOW_WIDTH 3000
 #define WINDOW_HEIGHT 2000
 
+const int MAX_PARTICLES = 20000;
 const int DAM_PARTICLES = 500;
 
 const float VIEW_WIDTH = 1.5 * WINDOW_WIDTH;
@@ -157,10 +152,11 @@ void compute_density_pressure( void )
        et al. */
     const float POLY6 = 4.0 / (M_PI * pow(H, 8));
 
+#pragma omp parallel for default(none) shared(particles, MASS, HSQ, POLY6, REST_DENS, GAS_CONST, n_particles) 
     for (int i=0; i<n_particles; i++) {
         particle_t *pi = &particles[i];
         pi->rho = 0.0;
-        for (int j=0; j<n_particles; j++) {
+	for (int j=0; j<n_particles; j++) {
             const particle_t *pj = &particles[j];
 
             const float dx = pj->x - pi->x;
@@ -168,7 +164,7 @@ void compute_density_pressure( void )
             const float d2 = dx*dx + dy*dy;
 
             if (d2 < HSQ) {
-                pi->rho += MASS * POLY6 * pow(HSQ - d2, 3.0);
+               pi->rho += MASS * POLY6 * pow(HSQ - d2, 3.0);
             }
         }
         pi->p = GAS_CONST * (pi->rho - REST_DENS);
@@ -219,8 +215,8 @@ void compute_forces( void )
 
 void integrate( void )
 {
-#pragma omp parallel for
-    for (int i=0; i<n_particles; i++) {
+#pragma omp parallel for default(none) shared(n_particles, particles, DT, EPS, BOUND_DAMPING, VIEW_WIDTH, VIEW_HEIGHT) 
+   for (int i=0; i<n_particles; i++) {
         particle_t *p = &particles[i];
         // forward Euler integration
         p->vx += DT * p->fx / p->rho;
@@ -251,6 +247,7 @@ void integrate( void )
 float avg_velocities( void )
 {
     double result = 0.0;
+#pragma omp parallel for default(none) shared(n_particles, particles) reduction(+:result)
     for (int i=0; i<n_particles; i++) {
         /* the hypot(x,y) function is equivalent to sqrt(x*x +
            y*y); */
@@ -296,6 +293,8 @@ int main(int argc, char **argv)
     }
 
     init_sph(n);
+    double tstart, tstop;
+    tstart = omp_get_wtime();
     for (int s=0; s<nsteps; s++) {
         update();
         /* the average velocities MUST be computed at each step, even
@@ -305,7 +304,8 @@ int main(int argc, char **argv)
         if (s % 10 == 0)
             printf("step %5d, avgV=%f\n", s, avg);
     }
-
+    tstop = omp_get_wtime();
+    printf("Elapsed time: %f ", tstop - tstart);
     free(particles);
     return EXIT_SUCCESS;
 }
