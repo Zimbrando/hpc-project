@@ -28,18 +28,11 @@
  * SOFTWARE.
  *
  ****************************************************************************/
-#ifdef GUI
-#if __APPLE__
-#include <GLUT/glut.h>
-#else
-#include <GL/glut.h>
-#endif
-#endif
-
 #include <stdio.h>
 #include <stdlib.h>
 #include <math.h>
 #include <assert.h>
+#include <omp.h>
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
@@ -48,35 +41,20 @@
 /* "Particle-Based Fluid Simulation for Interactive Applications" by
    Müller et al. solver parameters */
 
-const float Gx = 0.0, Gy = -10.0;   // external (gravitational) forces
-const float REST_DENS = 300;    // rest density
-const float GAS_CONST = 2000;   // const for equation of state
-const float H = 16;             // kernel radius
-const float EPS = 16;           // equal to H
-const float MASS = 2.5;         // assume all particles have the same mass
-const float VISC = 200;         // viscosity constant
-const float DT = 0.0007;        // integration timestep
-const float BOUND_DAMPING = -0.5;
+__device__ __constant__ float Gx = 0.0, Gy = -10.0;   // external (gravitational) forces
+__device__ __constant__ float REST_DENS = 300;    // rest density
+__device__ __constant__ float GAS_CONST = 2000;   // const for equation of state
+__device__ __constant__ float H = 16;             // kernel radius
+__device__ __constant__ float EPS = 16;           // equal to H
+__device__ __constant__ float MASS = 2.5;         // assume all particles have the same mass
+__device__ __constant__ float VISC = 200;         // viscosity constant
+__device__ __constant__ float DT = 0.0007;        // integration timestep
+__device__ __constant__ float BOUND_DAMPING = -0.5;
 
-// rendering projection parameters
-// (the following ought to be "const float", but then the compiler
-// would give an error because VIEW_WIDTH and VIEW_HEIGHT are
-// initialized with non-literal expressions)
-#ifdef GUI
-
-const int MAX_PARTICLES = 5000;
-#define WINDOW_WIDTH 1024
-#define WINDOW_HEIGHT 768
-
-#else
-
-const int MAX_PARTICLES = 20000;
-// Larger window size to accommodate more particles
 #define WINDOW_WIDTH 3000
 #define WINDOW_HEIGHT 2000
 
-#endif
-
+const int MAX_PARTICLES = 20000;
 const int DAM_PARTICLES = 500;
 
 const float VIEW_WIDTH = 1.5 * WINDOW_WIDTH;
@@ -88,13 +66,13 @@ const float VIEW_HEIGHT = 1.5 * WINDOW_HEIGHT;
    You may choose a different layout of the particles[] data structure
    to suit your needs. */
 typedef struct {
-    float x, y;         // position
-    float vx, vy;       // velocity
-    float fx, fy;       // force
-    float rho, p;       // density, pressure
-} particle_t;
+    float *x, *y;         // position
+    float *vx, *vy;       // velocity
+    float *fx, *fy;       // force
+    float *rho, *p;       // density, pressure
+} particles_t;
 
-particle_t *particles;
+__device__ particles_t d_particles;
 int n_particles = 0;    // number of currently active particles
 
 /**
@@ -106,10 +84,10 @@ float randab(float a, float b)
 }
 
 /**
- * Set initial position of particle `*p` to (x, y); initialize all
+ * Set initial position of particle i to (x, y); initialize all
  * other attributes to default values (zeros).
  */
-void init_particle( particle_t *p, float x, float y )
+void init_particle( int i, float x, float y )
 {
     p->x = x;
     p->y = y;
@@ -147,6 +125,10 @@ void init_sph( int n )
     n_particles = 0;
     printf("Initializing with %d particles\n", n);
 
+    cudaMalloc((void**)&&d_particles, sizeof(particles_t));
+    cudaMalloc((void**)&&d_particles.x, sizeof(float) * n);
+
+    /*
     for (float y = EPS; y < VIEW_HEIGHT - EPS; y += H) {
         for (float x = EPS; x <= VIEW_WIDTH * 0.8f; x += H) {
             if (n_particles < n) {
@@ -159,11 +141,9 @@ void init_sph( int n )
         }
     }
     assert(n_particles == n);
+    */
 }
 
-/**
- ** You may parallelize the following four functions
- **/
 
 void compute_density_pressure( void )
 {
@@ -177,7 +157,7 @@ void compute_density_pressure( void )
     for (int i=0; i<n_particles; i++) {
         particle_t *pi = &particles[i];
         pi->rho = 0.0;
-        for (int j=0; j<n_particles; j++) {
+	    for (int j=0; j<n_particles; j++) {
             const particle_t *pj = &particles[j];
 
             const float dx = pj->x - pi->x;
@@ -185,7 +165,7 @@ void compute_density_pressure( void )
             const float d2 = dx*dx + dy*dy;
 
             if (d2 < HSQ) {
-                pi->rho += MASS * POLY6 * pow(HSQ - d2, 3.0);
+               pi->rho += MASS * POLY6 * pow(HSQ - d2, 3.0);
             }
         }
         pi->p = GAS_CONST * (pi->rho - REST_DENS);
@@ -282,95 +262,6 @@ void update( void )
     integrate();
 }
 
-#ifdef GUI
-/**
- ** GUI-specific functions. You can enable the GUI by compiling this
- ** program with the -DGUI flag. Note, however, that the GUI version
- ** will NOT be evaluated, and therefore is not required to work with
- ** the parallel code. You are allowed to completely remove the block
- ** #ifdef GUI ... #endif from the source code.
- **/
-
-/**
- * Place a ball with radius `r` centered at (cx, cy) into the frame.
- */
-void place_ball( float cx, float cy, float r )
-{
-    for (float y = cy-r; y<cy+r; y += H) {
-        for (float x = cx-r; x<cx+r; x += H) {
-            if ((n_particles < MAX_PARTICLES) &&
-                is_in_domain(x, y) &&
-                ((x-cx)*(x-cx) + (y-cy)*(y-cy) <= r*r)) {
-                /* Add a small random jitter to the points, so that
-                   the result will be more realistic */
-                const float jitterx = rand() / (float)RAND_MAX;
-                const float jittery = rand() / (float)RAND_MAX;
-                init_particle(particles + n_particles, x+jitterx, y+jittery);
-                n_particles++;
-            }
-        }
-    }
-}
-
-void init_gl( void )
-{
-    glClearColor(0.9, 0.9, 0.9, 1);
-    glEnable(GL_POINT_SMOOTH);
-    glPointSize(H / 2.0);
-    glMatrixMode(GL_PROJECTION);
-}
-
-void render( void )
-{
-    static const int MAX_FRAMES = 100;
-    static int frameno = 0;
-
-    glClear(GL_COLOR_BUFFER_BIT);
-
-    glLoadIdentity();
-    glOrtho(0, VIEW_WIDTH, 0, VIEW_HEIGHT, 0, 1);
-
-    glColor4f(0.2, 0.6, 1.0, 1);
-    glBegin(GL_POINTS);
-    for (int i=0; i<n_particles; i++) {
-        glVertex2f(particles[i].x, particles[i].y);
-    }
-    glEnd();
-
-    glutSwapBuffers();
-    glutPostRedisplay();
-    frameno++;
-    if (frameno > MAX_FRAMES) {
-        const float avg = avg_velocities();
-        printf("avgV=%f\n", avg);
-        frameno = 0;
-    }
-}
-
-/**
- * The compiler might issue a warning due to parameters `x` and `y`
- * being unused; this warning can be ignored.
- */
-void keyboard_handler(unsigned char c, int x, int y)
-{
-    if (c=='r' || c=='R')  {
-        init_sph(DAM_PARTICLES);
-    }
-}
-
-void mouse_handler(int button, int state, int x, int y)
-{
-    static const float RADIUS = 110.0;
-    if (button == GLUT_LEFT_BUTTON && state == GLUT_DOWN) {
-        place_ball(1.5*x, VIEW_HEIGHT - 1.5*y, RADIUS);
-        printf("n. particles/max particles: %d/%d\n", n_particles, MAX_PARTICLES);
-    }
-}
-
-/**
- ** END of GUI-specific functions
- **/
-#endif
 
 int main(int argc, char **argv)
 {
@@ -379,21 +270,6 @@ int main(int argc, char **argv)
     particles = (particle_t*)malloc(MAX_PARTICLES * sizeof(*particles));
     assert( particles != NULL );
 
-#ifdef GUI
-    glutInitWindowSize(WINDOW_WIDTH, WINDOW_HEIGHT);
-    glutInitDisplayMode(GLUT_DOUBLE | GLUT_RGB);
-    glutInit(&argc, argv);
-    glutCreateWindow("Muller SPH");
-    glutDisplayFunc(render);
-    glutIdleFunc(update);
-    glutKeyboardFunc(keyboard_handler);
-    glutMouseFunc(mouse_handler);
-
-    init_gl();
-    init_sph(DAM_PARTICLES);
-
-    glutMainLoop();
-#else
     int n = DAM_PARTICLES;
     int nsteps = 50;
 
@@ -416,16 +292,18 @@ int main(int argc, char **argv)
     }
 
     init_sph(n);
+    /*
+    double tstart, tstop;
+    tstart = omp_get_wtime();
     for (int s=0; s<nsteps; s++) {
         update();
-        /* the average velocities MUST be computed at each step, even
-           if it is not shown (to ensure constant workload per
-           iteration) */
         const float avg = avg_velocities();
         if (s % 10 == 0)
             printf("step %5d, avgV=%f\n", s, avg);
     }
-#endif
+    tstop = omp_get_wtime();
+    printf("Elapsed time: %fs ", tstop - tstart);
     free(particles);
+    */
     return EXIT_SUCCESS;
 }
