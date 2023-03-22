@@ -58,7 +58,7 @@ const int MAX_PARTICLES = 20000;
 const int DAM_PARTICLES = 500;
 
 const float VIEW_WIDTH = 1.5 * WINDOW_WIDTH;
-const float VIEW_HEIGHT = 1.5 * WINDOW_HEIGHT; compute_density;
+const float VIEW_HEIGHT = 1.5 * WINDOW_HEIGHT;
 
 /* Particle data structure; stores position, velocity, and force for
    integration stores density (rho) and pressure values for SPH.
