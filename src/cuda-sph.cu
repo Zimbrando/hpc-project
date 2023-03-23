@@ -41,15 +41,15 @@
 /* "Particle-Based Fluid Simulation for Interactive Applications" by
    Müller et al. solver parameters */
 
-__device__ __constant__ float Gx = 0.0, Gy = -10.0;   // external (gravitational) forces
-__device__ __constant__ float REST_DENS = 300;    // rest density
-__device__ __constant__ float GAS_CONST = 2000;   // const for equation of state
-__device__ __constant__ float H = 16;             // kernel radius
-__device__ __constant__ float EPS = 16;           // equal to H
-__device__ __constant__ float MASS = 2.5;         // assume all particles have the same mass
-__device__ __constant__ float VISC = 200;         // viscosity constant
-__device__ __constant__ float DT = 0.0007;        // integration timestep
-__device__ __constant__ float BOUND_DAMPING = -0.5;
+__constant__ float Gx = 0.0, Gy = -10.0;   // external (gravitational) forces
+__constant__ float REST_DENS = 300;    // rest density
+__constant__ float GAS_CONST = 2000;   // const for equation of state
+const __constant__ float H = 16;             // kernel radius
+const __constant__ float EPS = 16;           // equal to H
+__constant__ float MASS = 2.5;         // assume all particles have the same mass
+__constant__ float VISC = 200;         // viscosity constant
+__constant__ float DT = 0.0007;        // integration timestep
+__constant__ float BOUND_DAMPING = -0.5;
 
 #define WINDOW_WIDTH 3000
 #define WINDOW_HEIGHT 2000
@@ -62,9 +62,7 @@ const float VIEW_HEIGHT = 1.5 * WINDOW_HEIGHT;
 
 /* Particle data structure; stores position, velocity, and force for
    integration stores density (rho) and pressure values for SPH.
-
-   You may choose a different layout of the particles[] data structure
-   to suit your needs. */
+*/
 typedef struct {
     float *x, *y;         // position
     float *vx, *vy;       // velocity
@@ -72,8 +70,15 @@ typedef struct {
     float *rho, *p;       // density, pressure
 } particles_t;
 
-__device__ particles_t d_particles;
+particles_t *d_particles; // device structure
+float *d_x, *d_y, *d_vx, *d_vy, *d_fx, *d_fy, *d_p, *d_rho; // device arrays inserted in the structure
 int n_particles = 0;    // number of currently active particles
+
+__global__ void kernel_main(particles_t *particles) {
+    printf("\nrho: %f", particles->rho[0]);
+    printf("\nx: %f, y: %f", particles->x[40], particles->y[60]);
+}
+
 
 /**
  * Return a random value in [a, b]
@@ -87,14 +92,10 @@ float randab(float a, float b)
  * Set initial position of particle i to (x, y); initialize all
  * other attributes to default values (zeros).
  */
-void init_particle( int i, float x, float y )
+void init_particle(particles_t *particles, int i, float x, float y )
 {
-    p->x = x;
-    p->y = y;
-    p->vx = p->vy = 0.0;
-    p->fx = p->fy = 0.0;
-    p->rho = 0.0;
-    p->p = 0.0;
+   particles->x[i] = x;
+   particles->y[i] = y;
 }
 
 /**
@@ -112,163 +113,82 @@ int is_in_domain( float x, float y )
  * Initialize the SPH model with `n` particles. The caller is
  * responsible for allocating the `particles[]` array of size
  * `MAX_PARTICLES`.
- *
- * DO NOT parallelize this function, since it calls rand() which is
- * not thread-safe.
- *
- * For MPI and OpenMP: only the master must initialize the domain;
- *
- * For CUDA: the CPU must initialize the domain.
  */
 void init_sph( int n )
 {
     n_particles = 0;
-    printf("Initializing with %d particles\n", n);
+    printf("Initializing with %d particles\n", n);   
+    const size_t array_size = sizeof(float) * n;
+    
+    /* Allocate in the device the arrays */
+    cudaMalloc((void**)&d_x, array_size);
+    cudaMalloc((void**)&d_y, array_size);
+    cudaMalloc((void**)&d_vx, array_size);
+    cudaMalloc((void**)&d_vy, array_size);
+    cudaMalloc((void**)&d_fx, array_size);
+    cudaMalloc((void**)&d_fy, array_size);
+    cudaMalloc((void**)&d_p, array_size);
+    cudaMalloc((void**)&d_rho, array_size);
 
-    cudaMalloc((void**)&&d_particles, sizeof(particles_t));
-    cudaMalloc((void**)&&d_particles.x, sizeof(float) * n);
+    /* Create an host instance of the particles and initialize it */
+    particles_t *particles = (particles_t*) malloc(sizeof(particles_t));
+    particles->x = (float*) malloc(array_size);
+    particles->y = (float*) malloc(array_size);
+    particles->vx = (float*) calloc(n, sizeof(float));
+    particles->vy = (float*) calloc(n, sizeof(float));
+    particles->fx = (float*) calloc(n, sizeof(float));
+    particles->fy = (float*) calloc(n, sizeof(float));
+    particles->p = (float*) calloc(n, sizeof(float));
+    particles->rho = (float*) calloc(n, sizeof(float));
 
-    /*
     for (float y = EPS; y < VIEW_HEIGHT - EPS; y += H) {
         for (float x = EPS; x <= VIEW_WIDTH * 0.8f; x += H) {
             if (n_particles < n) {
                 float jitter = rand() / (float)RAND_MAX;
-                init_particle(particles + n_particles, x+jitter, y);
+                init_particle(particles, n_particles, x+jitter, y);
                 n_particles++;
-            } else {
-                return;
             }
         }
-    }
-    assert(n_particles == n);
-    */
-}
+   }
+   
+   /* Copy the pointer to the device arrays in the device structure */
+   cudaMalloc((void**)&d_particles, sizeof(particles_t));
+   cudaMemcpy(&(d_particles->x), &d_x, sizeof(float*), cudaMemcpyHostToDevice); 
+   cudaMemcpy(&(d_particles->y), &d_y, sizeof(float*), cudaMemcpyHostToDevice); 
+   cudaMemcpy(&(d_particles->vx), &d_vx, sizeof(float*), cudaMemcpyHostToDevice); 
+   cudaMemcpy(&(d_particles->vy), &d_vy, sizeof(float*), cudaMemcpyHostToDevice); 
+   cudaMemcpy(&(d_particles->fx), &d_fx, sizeof(float*), cudaMemcpyHostToDevice); 
+   cudaMemcpy(&(d_particles->fy), &d_fy, sizeof(float*), cudaMemcpyHostToDevice); 
+   cudaMemcpy(&(d_particles->p), &d_p, sizeof(float*), cudaMemcpyHostToDevice); 
+   cudaMemcpy(&(d_particles->rho), &d_rho, sizeof(float*), cudaMemcpyHostToDevice); 
+   
+   /* Copy host initialized particles data in the device arrays that are referenced in the device structure */
+   cudaMemcpy(d_x, particles->x, array_size, cudaMemcpyHostToDevice);
+   cudaMemcpy(d_y, particles->y, array_size, cudaMemcpyHostToDevice);
+   cudaMemcpy(d_vx, particles->vx, array_size, cudaMemcpyHostToDevice);
+   cudaMemcpy(d_vy, particles->vy, array_size, cudaMemcpyHostToDevice);
+   cudaMemcpy(d_fx, particles->fx, array_size, cudaMemcpyHostToDevice);
+   cudaMemcpy(d_fy, particles->fy, array_size, cudaMemcpyHostToDevice);
+   cudaMemcpy(d_p, particles->p, array_size, cudaMemcpyHostToDevice);
+   cudaMemcpy(d_rho, particles->rho, array_size, cudaMemcpyHostToDevice);
+   
+   assert(n_particles == n);    
 
-
-void compute_density_pressure( void )
-{
-    const float HSQ = H * H;    // radius^2 for optimization
-
-    /* Smoothing kernels defined in Muller and their gradients adapted
-       to 2D per "SPH Based Shallow Water Simulation" by Solenthaler
-       et al. */
-    const float POLY6 = 4.0 / (M_PI * pow(H, 8));
-
-    for (int i=0; i<n_particles; i++) {
-        particle_t *pi = &particles[i];
-        pi->rho = 0.0;
-	    for (int j=0; j<n_particles; j++) {
-            const particle_t *pj = &particles[j];
-
-            const float dx = pj->x - pi->x;
-            const float dy = pj->y - pi->y;
-            const float d2 = dx*dx + dy*dy;
-
-            if (d2 < HSQ) {
-               pi->rho += MASS * POLY6 * pow(HSQ - d2, 3.0);
-            }
-        }
-        pi->p = GAS_CONST * (pi->rho - REST_DENS);
-    }
-}
-
-void compute_forces( void )
-{
-    /* Smoothing kernels defined in Muller and their gradients adapted
-       to 2D per "SPH Based Shallow Water Simulation" by Solenthaler
-       et al. */
-    const float SPIKY_GRAD = -10.0 / (M_PI * pow(H, 5));
-    const float VISC_LAP = 40.0 / (M_PI * pow(H, 5));
-    const float EPS = 1e-6;
-
-    for (int i=0; i<n_particles; i++) {
-        particle_t *pi = &particles[i];
-        float fpress_x = 0.0, fpress_y = 0.0;
-        float fvisc_x = 0.0, fvisc_y = 0.0;
-
-        for (int j=0; j<n_particles; j++) {
-            const particle_t *pj = &particles[j];
-
-            if (pi == pj)
-                continue;
-
-            const float dx = pj->x - pi->x;
-            const float dy = pj->y - pi->y;
-            const float dist = hypotf(dx, dy) + EPS; // avoids division by zero later on
-
-            if (dist < H) {
-                const float norm_dx = dx / dist;
-                const float norm_dy = dy / dist;
-                // compute pressure force contribution
-                fpress_x += -norm_dx * MASS * (pi->p + pj->p) / (2 * pj->rho) * SPIKY_GRAD * pow(H - dist, 3);
-                fpress_y += -norm_dy * MASS * (pi->p + pj->p) / (2 * pj->rho) * SPIKY_GRAD * pow(H - dist, 3);
-                // compute viscosity force contribution
-                fvisc_x += VISC * MASS * (pj->vx - pi->vx) / pj->rho * VISC_LAP * (H - dist);
-                fvisc_y += VISC * MASS * (pj->vy - pi->vy) / pj->rho * VISC_LAP * (H - dist);
-            }
-        }
-        const float fgrav_x = Gx * MASS / pi->rho;
-        const float fgrav_y = Gy * MASS / pi->rho;
-        pi->fx = fpress_x + fvisc_x + fgrav_x;
-        pi->fy = fpress_y + fvisc_y + fgrav_y;
-    }
-}
-
-void integrate( void )
-{
-    for (int i=0; i<n_particles; i++) {
-        particle_t *p = &particles[i];
-        // forward Euler integration
-        p->vx += DT * p->fx / p->rho;
-        p->vy += DT * p->fy / p->rho;
-        p->x += DT * p->vx;
-        p->y += DT * p->vy;
-
-        // enforce boundary conditions
-        if (p->x - EPS < 0.0) {
-            p->vx *= BOUND_DAMPING;
-            p->x = EPS;
-        }
-        if (p->x + EPS > VIEW_WIDTH) {
-            p->vx *= BOUND_DAMPING;
-            p->x = VIEW_WIDTH - EPS;
-        }
-        if (p->y - EPS < 0.0) {
-            p->vy *= BOUND_DAMPING;
-            p->y = EPS;
-        }
-        if (p->y + EPS > VIEW_HEIGHT) {
-            p->vy *= BOUND_DAMPING;
-            p->y = VIEW_HEIGHT - EPS;
-        }
-    }
-}
-
-float avg_velocities( void )
-{
-    double result = 0.0;
-    for (int i=0; i<n_particles; i++) {
-        /* the hypot(x,y) function is equivalent to sqrt(x*x +
-           y*y); */
-        result += hypot(particles[i].vx, particles[i].vy) / n_particles;
-    }
-    return result;
-}
-
-void update( void )
-{
-    compute_density_pressure();
-    compute_forces();
-    integrate();
+   free(particles->x);
+   free(particles->y);
+   free(particles->vx);
+   free(particles->vy);
+   free(particles->fx);
+   free(particles->fy);
+   free(particles->p);
+   free(particles->rho);
+   free(particles);
 }
 
 
 int main(int argc, char **argv)
 {
     srand(1234);
-
-    particles = (particle_t*)malloc(MAX_PARTICLES * sizeof(*particles));
-    assert( particles != NULL );
 
     int n = DAM_PARTICLES;
     int nsteps = 50;
@@ -292,6 +212,11 @@ int main(int argc, char **argv)
     }
 
     init_sph(n);
+	
+    kernel_main<<<1, 1>>>(d_particles);
+    
+    cudaDeviceSynchronize();
+    //printf("Address: %x ", d_particles);
     /*
     double tstart, tstop;
     tstart = omp_get_wtime();
@@ -305,5 +230,16 @@ int main(int argc, char **argv)
     printf("Elapsed time: %fs ", tstop - tstart);
     free(particles);
     */
-    return EXIT_SUCCESS;
+    
+   cudaFree(d_x);
+   cudaFree(d_y);
+   cudaFree(d_vx);
+   cudaFree(d_vy);
+   cudaFree(d_fx);
+   cudaFree(d_fy);
+   cudaFree(d_p);
+   cudaFree(d_rho);
+   cudaFree(d_particles);
+   
+   return EXIT_SUCCESS;
 }

@@ -25,8 +25,8 @@ omp-sph: omp-sph.c
 
 all: $(EXE)
 
-cuda-sph: cuda-sph.c
-	$(CC) $(CFLAGS) $< $(LDLIBS) -o $(BUILDDIR)/$@
+cuda-sph: cuda-sph.cu
+	nvcc $< -o $(BUILDDIR)/$@
 
 clean:
 	\rm -f $(EXE) *.o *~
