@@ -308,11 +308,8 @@ void init_sph( int n )
 void update()
 {
     k_compute_density_pressure<<<grid, block>>>(d_particles, n_particles);
-    cudaDeviceSynchronize();
     k_compute_forces<<<grid, block>>>(d_particles, n_particles);
-    cudaDeviceSynchronize();
     k_integrate<<<grid, block>>>(d_particles, n_particles);
-    cudaDeviceSynchronize();
 }
 
 
@@ -345,19 +342,17 @@ int main(int argc, char **argv)
     init_sph(n);
     block = dim3(BLKDIM);
     grid = dim3((n_particles+BLKDIM-1)/BLKDIM);
-    
+    float *partial_avg_out = (float*)malloc(sizeof(float) * grid.x), avg_velocity = 0;
     double tstart, tstop;
     tstart = hpc_gettime();
     for (int s=0; s<nsteps; s++) {
         update();
 	// Calculate avg velocity
 	k_avg_velocities<<<grid, block>>>(d_particles, n_particles, d_avg_out);
-	cudaDeviceSynchronize();
 	
 	/* Computes the avg velocity each iteration to 
 	   mantain an equal amount of workload */
-	
-	float *partial_avg_out = (float*)malloc(sizeof(float) * grid.x), avg_velocity = 0;
+	avg_velocity = 0;
 	cudaMemcpy(partial_avg_out, d_avg_out, sizeof(float) * grid.x, cudaMemcpyDeviceToHost);
         for (int i=0; i < grid.x; i++) {
 	   avg_velocity += partial_avg_out[i];
@@ -379,6 +374,8 @@ int main(int argc, char **argv)
    cudaFree(d_p);
    cudaFree(d_rho);
    cudaFree(d_particles);
+   cudaFree(d_avg_out);
+   free(partial_avg_out);
    
    return EXIT_SUCCESS;
 }
