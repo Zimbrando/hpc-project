@@ -192,13 +192,13 @@ __global__ void k_avg_velocities( particles_t *ps, int n, float* o_result )
    
     /* If the thread is mapped to a non-existent
        particle put 0 */
-    if (gind > n) {
+    if (gind >= n ) {
         s_results[lind] = 0;
     } else {
-        s_results[lind] = hypot(ps->vx[gind], ps->vy[gind]) / n;
+        s_results[lind] = hypotf(ps->vx[gind], ps->vy[gind]) / n;
     }
     __syncthreads();
-    
+   
     for (unsigned int s=blockDim.x/2; s>0; s/=2) {
         if (lind < s) {
             s_results[lind] += s_results[lind + s];
@@ -206,8 +206,9 @@ __global__ void k_avg_velocities( particles_t *ps, int n, float* o_result )
         __syncthreads();
     }
     
-    if (lind == 0) 
+    if (lind == 0) {
         o_result[blockIdx.x] = s_results[0];
+    }
 }
 
 /**
@@ -226,6 +227,12 @@ void init_particle(particles_t *particles, int i, float x, float y )
 {
    particles->x[i] = x;
    particles->y[i] = y;
+   particles->fx[i] = 0;
+   particles->fy[i] = 0;
+   particles->vx[i] = 0;
+   particles->vy[i] = 0;
+   particles->p[i] = 0;
+   particles->rho[i] = 0;
 }
 
 /**
@@ -240,9 +247,7 @@ int is_in_domain( float x, float y )
 }
 
 /**
- * Initialize the SPH model with `n` particles. The caller is
- * responsible for allocating the `particles[]` array of size
- * `MAX_PARTICLES`.
+ * Initialize the SPH model with `n` particles
  */
 void init_sph( int n )
 {
@@ -335,7 +340,7 @@ void init_constants( void )
     cudaMemcpyToSymbol(VISC_LAP, &H_VISC_LAP, size);
 }
 
-void update()
+void update( void )
 {
     /* Launch all the kernels in queue */
     k_compute_density_pressure<<<grid, block>>>(d_particles, n_particles);
@@ -381,7 +386,6 @@ int main(int argc, char **argv)
         update();
 	// Calculate avg velocity
 	k_avg_velocities<<<grid, block>>>(d_particles, n_particles, d_avg_out);
-	
 	/* Computes the avg velocity each iteration to 
 	   mantain an equal amount of workload */
 	avg_velocity = 0;

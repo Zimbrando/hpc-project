@@ -33,6 +33,7 @@
 #include <math.h>
 #include <assert.h>
 #include <omp.h>
+#include <unistd.h>
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
@@ -120,10 +121,11 @@ int is_in_domain( float x, float y )
  *
  * For CUDA: the CPU must initialize the domain.
  */
-void init_sph( int n )
+void init_sph( int n, int quiet )
 {
     n_particles = 0;
-    printf("Initializing with %d particles\n", n);
+    if (!quiet)
+        printf("Initializing with %d particles\n", n);
 
     for (float y = EPS; y < VIEW_HEIGHT - EPS; y += H) {
         for (float x = EPS; x <= VIEW_WIDTH * 0.8f; x += H) {
@@ -274,26 +276,32 @@ int main(int argc, char **argv)
 
     int n = DAM_PARTICLES;
     int nsteps = 50;
+    int opt;
+    int quiet = 0;
 
-    if (argc > 3) {
-        fprintf(stderr, "Usage: %s [nparticles [nsteps]]\n", argv[0]);
-        return EXIT_FAILURE;
-    }
-
-    if (argc > 1) {
-        n = atoi(argv[1]);
-    }
-
-    if (argc > 2) {
-        nsteps = atoi(argv[2]);
-    }
-
+    while ((opt = getopt(argc, argv, "p:s:q")) != -1) {
+        switch (opt) {
+            case 'p':
+                n = atoi(optarg);
+                break;
+            case 's':
+                nsteps = atoi(optarg);
+                break;
+            case 'q':
+                quiet = 1;
+                break;
+            default:
+                fprintf(stderr, "Usage: %s [-p number of particles] [-s number of steps] [-q]\n", argv[0]);
+                return EXIT_FAILURE;
+        }
+    } 
+    
     if (n > MAX_PARTICLES) {
         fprintf(stderr, "FATAL: the maximum number of particles is %d\n", MAX_PARTICLES);
         return EXIT_FAILURE;
     }
 
-    init_sph(n);
+    init_sph(n, quiet);
     double tstart, tstop;
     tstart = omp_get_wtime();
     for (int s=0; s<nsteps; s++) {
@@ -302,11 +310,11 @@ int main(int argc, char **argv)
            if it is not shown (to ensure constant workload per
            iteration) */
         const float avg = avg_velocities();
-        if (s % 10 == 0)
+        if (s % 10 == 0 && !quiet)
             printf("step %5d, avgV=%f\n", s, avg);
     }
     tstop = omp_get_wtime();
-    printf("Elapsed time: %fs ", tstop - tstart);
+    printf("Execution time %fs ", tstop - tstart);
     free(particles);
     return EXIT_SUCCESS;
 }

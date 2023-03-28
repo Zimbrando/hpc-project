@@ -29,4 +29,4 @@ cuda-sph: cuda-sph.cu
 	nvcc $< -o $(BUILDDIR)/$@
 
 clean:
-	\rm -f $(EXE) *.o *~
+	\rm -f $(BUILDDIR)/*
