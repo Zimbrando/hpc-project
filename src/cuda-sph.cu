@@ -116,6 +116,7 @@ __global__ void k_compute_forces( particles_t *ps, int n )
        to 2D per "SPH Based Shallow Water Simulation" by Solenthaler
        et al. */
     const int i = threadIdx.x + blockIdx.x * blockDim.x;
+    const float EPS = 1e-6;
 
     if (i < n) {
         float fpress_x = 0.0, fpress_y = 0.0;
