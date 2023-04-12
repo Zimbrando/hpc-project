@@ -11,20 +11,18 @@ if [ ! -f "$PROG" ]; then
 	exit 1	
 fi
 
+SIZE=(1000 3000 5000 8000 10000)
 
-for st in {50..200..50}; do
-	echo "$st steps"
-	for ps in {5000..20000..1000}; do
-		echo -n -e "$ps\t"
-		SUM=0
-		for rep in `seq 5`; do
-			EXEC_TIME="$( "$PROG" -p$ps -s$st -q | sed 's/Execution time //' )"
-			NUM=${EXEC_TIME:0:-2}
-			SUM=$(echo "$SUM + $NUM" | bc -l)
-			echo -n -e "${EXEC_TIME}\t"
-		done
-		AVG=$(echo "scale=4; $SUM / 5" | bc -l)
-		TH=$(echo "scale=4; ($st * $ps) / $AVG" | bc -l)
-		echo "AVG $AVG s; TH $TH p/s"
+for ps in "${SIZE[@]}"; do
+	echo -n -e "$ps\t"
+	SUM=0
+	for rep in `seq 5`; do
+		EXEC_TIME="$( "$PROG" -p$ps -s$st -q | sed 's/Execution time //' )"
+		NUM=${EXEC_TIME:0:-2}
+		SUM=$(echo "$SUM + $NUM" | bc -l)
+		echo -n -e "${EXEC_TIME}\t"
 	done
+	AVG=$(echo "scale=4; $SUM / 5" | bc -l)
+	TH=$(echo "scale=4; (50 * $ps) / $AVG" | bc -l)
+	echo "AVG $AVG s; TH $TH p/s"
 done

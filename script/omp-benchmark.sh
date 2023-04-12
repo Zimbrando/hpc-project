@@ -11,9 +11,9 @@ if [ ! -f "$PROG" ]; then
     exit 1	
 fi
 
-#Measure speedup
+#Measure speedup and strong scaling efficiency
 
-SIZE=(1000 5000 7500 10000 15000)
+SIZE=(1000 3000 5000 8000 10000)
 CORES=`cat /proc/cpuinfo | grep processor | wc -l` # number of cores
 
 for s in "${SIZE[@]}"; do
@@ -30,4 +30,19 @@ for s in "${SIZE[@]}"; do
         AVG=$(echo "scale=4; $SUM / 5" | bc -l)
         echo "AVG $AVG s"
     done
+done
+
+#Measure weak scaling efficiency
+N=(2000)  
+echo ""
+echo "Weak scaling efficiency: "
+echo ""
+for p in `seq $CORES`; do
+    echo -n -e "$p\t"
+    PROB_SIZE=$(echo "$N * sqrt($p)" | bc -l)
+    for rep in `seq 5`; do
+        EXEC_TIME="$( OMP_NUM_THREADS=$p "$PROG" -p$PROB_SIZE -q | sed 's/Execution time //' )"
+        echo -n -e "${EXEC_TIME}\t"
+    done
+    echo ""
 done

@@ -144,7 +144,6 @@ void init_sph( int n, int quiet )
 /**
  ** You may parallelize the following four functions
  **/
-
 void compute_density_pressure( void )
 {
     const float HSQ = H * H;    // radius^2 for optimization
@@ -153,20 +152,23 @@ void compute_density_pressure( void )
        to 2D per "SPH Based Shallow Water Simulation" by Solenthaler
        et al. */
     const float POLY6 = 4.0 / (M_PI * pow(H, 8));
-    float rho[n_particles];
+    float rho[n_particles]; /* Reduction array */
 
 #pragma omp parallel default(none) shared(particles, rho, MASS, HSQ, POLY6, REST_DENS, GAS_CONST, n_particles)
 	{
+
+/* Initialize the reduction array */
 #pragma omp for
-    	for (int i=0; i<n_particles; i++) {
+        for (int i=0; i<n_particles; i++) {
             rho[i] = 0;
         }
 
-#pragma omp for collapse(2) schedule(static) reduction(+:rho[:n_particles])
+/* Each thread operates its i interval, no race conditions */
+#pragma omp for schedule(static) reduction(+:rho[:n_particles])
     	for (int i=0; i<n_particles; i++) {
-        	for (int j=0; j<n_particles; j++) {
-           		particle_t *pi = &particles[i];
-	    		const particle_t *pj = &particles[j];
+            const particle_t *pi = &particles[i];
+            for (int j=0; j<n_particles; j++) {
+           		const particle_t *pj = &particles[j];
 
            		const float dx = pj->x - pi->x;
            		const float dy = pj->y - pi->y;
@@ -177,7 +179,7 @@ void compute_density_pressure( void )
           	    }
         	}
     	}
-    
+/* Assign the calculated density to the particles */
 #pragma omp for
     	for (int i=0; i<n_particles; i++) {
         	particle_t *pi = &particles[i];
@@ -196,11 +198,13 @@ void compute_forces( void )
     const float VISC_LAP = 40.0 / (M_PI * pow(H, 5));
     const float EPS = 1e-6;
 
+    /* Reduction arrays */
     float fpress_x[n_particles], fpress_y[n_particles];
     float fvisc_x[n_particles], fvisc_y[n_particles];
 
 #pragma omp parallel default(none) shared(particles, n_particles, SPIKY_GRAD, VISC_LAP, EPS, H, MASS, VISC, Gx, Gy, fpress_x, fpress_y, fvisc_x, fvisc_y)
     {
+/* Initialize the reduction array */
 #pragma omp for 
         for (int i=0; i<n_particles; i++) {
             fpress_x[i] = 0;
@@ -208,13 +212,13 @@ void compute_forces( void )
             fvisc_x[i] = 0;
             fvisc_y[i] = 0;        
         }
-
-#pragma omp for collapse(2) reduction(+:fpress_x[:n_particles], fpress_y[:n_particles], fvisc_x[:n_particles], fvisc_y[:n_particles])
+/* Calculate forces in the arrays */
+#pragma omp for schedule(dynamic) reduction(+:fpress_x[:n_particles], fpress_y[:n_particles], fvisc_x[:n_particles], fvisc_y[:n_particles])
         for (int i=0; i<n_particles; i++) {
+            const particle_t *pi = &particles[i];
             for (int j=0; j<n_particles; j++) {
                 const particle_t *pj = &particles[j];
-                particle_t *pi = &particles[i];
-                
+
                 if (pi == pj)
                     continue;
 
@@ -234,6 +238,7 @@ void compute_forces( void )
                 }
             }
         }
+/* Assign the results to the particles */
 #pragma omp for
         for (int i=0; i<n_particles; i++) {
             particle_t *pi = &particles[i];
