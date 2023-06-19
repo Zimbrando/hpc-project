@@ -60,7 +60,6 @@ const int DAM_PARTICLES = 500;
 
 const float VIEW_WIDTH = 1.5 * WINDOW_WIDTH;
 const float VIEW_HEIGHT = 1.5 * WINDOW_HEIGHT;
-
 /* Particle data structure; stores position, velocity, and force for
    integration stores density (rho) and pressure values for SPH.
 
@@ -144,6 +143,7 @@ void init_sph( int n, int quiet )
 /**
  ** You may parallelize the following four functions
  **/
+
 void compute_density_pressure( void )
 {
     const float HSQ = H * H;    // radius^2 for optimization
@@ -152,41 +152,24 @@ void compute_density_pressure( void )
        to 2D per "SPH Based Shallow Water Simulation" by Solenthaler
        et al. */
     const float POLY6 = 4.0 / (M_PI * pow(H, 8));
-    float rho[n_particles]; /* Reduction array */
 
-#pragma omp parallel default(none) shared(particles, rho, MASS, HSQ, POLY6, REST_DENS, GAS_CONST, n_particles)
-	{
+#pragma omp parallel for default(none) schedule(dynamic) shared(particles, MASS, HSQ, POLY6, REST_DENS, GAS_CONST, n_particles)
+    for (int i=0; i<n_particles; i++) {
+        particle_t *pi = &particles[i];
+        pi->rho = 0.0;
+	for (int j=0; j<n_particles; j++) {
+            const particle_t *pj = &particles[j];
 
-/* Initialize the reduction array */
-#pragma omp for
-        for (int i=0; i<n_particles; i++) {
-            rho[i] = 0;
+            const float dx = pj->x - pi->x;
+            const float dy = pj->y - pi->y;
+            const float d2 = dx*dx + dy*dy;
+
+            if (d2 < HSQ) {
+               pi->rho += MASS * POLY6 * pow(HSQ - d2, 3.0);
+            }
         }
-
-/* Each thread operates its i interval, no race conditions */
-#pragma omp for schedule(static) reduction(+:rho[:n_particles])
-    	for (int i=0; i<n_particles; i++) {
-            const particle_t *pi = &particles[i];
-            for (int j=0; j<n_particles; j++) {
-           		const particle_t *pj = &particles[j];
-
-           		const float dx = pj->x - pi->x;
-           		const float dy = pj->y - pi->y;
-           		const float d2 = dx*dx + dy*dy;
-
-           		if (d2 < HSQ) {
-         	    	rho[i] += MASS * POLY6 * pow(HSQ - d2, 3.0);
-          	    }
-        	}
-    	}
-/* Assign the calculated density to the particles */
-#pragma omp for
-    	for (int i=0; i<n_particles; i++) {
-        	particle_t *pi = &particles[i];
-			pi->rho = rho[i];
-			pi->p = GAS_CONST * (pi->rho - REST_DENS);
-    	}
-	}
+        pi->p = GAS_CONST * (pi->rho - REST_DENS);
+    }
 }
 
 void compute_forces( void )
@@ -198,55 +181,37 @@ void compute_forces( void )
     const float VISC_LAP = 40.0 / (M_PI * pow(H, 5));
     const float EPS = 1e-6;
 
-    /* Reduction arrays */
-    float fpress_x[n_particles], fpress_y[n_particles];
-    float fvisc_x[n_particles], fvisc_y[n_particles];
+#pragma omp parallel for default(none) schedule(dynamic) shared(particles, EPS, SPIKY_GRAD, VISC, VISC_LAP, MASS, H, Gx, Gy, n_particles)
+    for (int i=0; i<n_particles; i++) {
+        particle_t *pi = &particles[i];
+        float fpress_x = 0.0, fpress_y = 0.0;
+        float fvisc_x = 0.0, fvisc_y = 0.0;
 
-#pragma omp parallel default(none) shared(particles, n_particles, SPIKY_GRAD, VISC_LAP, EPS, H, MASS, VISC, Gx, Gy, fpress_x, fpress_y, fvisc_x, fvisc_y)
-    {
-/* Initialize the reduction array */
-#pragma omp for 
-        for (int i=0; i<n_particles; i++) {
-            fpress_x[i] = 0;
-            fpress_y[i] = 0;
-            fvisc_x[i] = 0;
-            fvisc_y[i] = 0;        
-        }
-/* Calculate forces in the arrays */
-#pragma omp for schedule(dynamic) reduction(+:fpress_x[:n_particles], fpress_y[:n_particles], fvisc_x[:n_particles], fvisc_y[:n_particles])
-        for (int i=0; i<n_particles; i++) {
-            const particle_t *pi = &particles[i];
-            for (int j=0; j<n_particles; j++) {
-                const particle_t *pj = &particles[j];
+        for (int j=0; j<n_particles; j++) {
+            const particle_t *pj = &particles[j];
 
-                if (pi == pj)
-                    continue;
+            if (pi == pj)
+                continue;
 
-                const float dx = pj->x - pi->x;
-                const float dy = pj->y - pi->y;
-                const float dist = hypotf(dx, dy) + EPS; // avoids division by zero later on
+            const float dx = pj->x - pi->x;
+            const float dy = pj->y - pi->y;
+            const float dist = hypotf(dx, dy) + EPS; // avoids division by zero later on
 
-                if (dist < H) {
-                    const float norm_dx = dx / dist;
-                    const float norm_dy = dy / dist;
-                    // compute pressure force contribution
-                    fpress_x[i] += -norm_dx * MASS * (pi->p + pj->p) / (2 * pj->rho) * SPIKY_GRAD * pow(H - dist, 3);
-                    fpress_y[i] += -norm_dy * MASS * (pi->p + pj->p) / (2 * pj->rho) * SPIKY_GRAD * pow(H - dist, 3);
-                    // compute viscosity force contribution
-                    fvisc_x[i] += VISC * MASS * (pj->vx - pi->vx) / pj->rho * VISC_LAP * (H - dist);
-                    fvisc_y[i] += VISC * MASS * (pj->vy - pi->vy) / pj->rho * VISC_LAP * (H - dist);
-                }
+            if (dist < H) {
+                const float norm_dx = dx / dist;
+                const float norm_dy = dy / dist;
+                // compute pressure force contribution
+                fpress_x += -norm_dx * MASS * (pi->p + pj->p) / (2 * pj->rho) * SPIKY_GRAD * pow(H - dist, 3);
+                fpress_y += -norm_dy * MASS * (pi->p + pj->p) / (2 * pj->rho) * SPIKY_GRAD * pow(H - dist, 3);
+                // compute viscosity force contribution
+                fvisc_x += VISC * MASS * (pj->vx - pi->vx) / pj->rho * VISC_LAP * (H - dist);
+                fvisc_y += VISC * MASS * (pj->vy - pi->vy) / pj->rho * VISC_LAP * (H - dist);
             }
         }
-/* Assign the results to the particles */
-#pragma omp for
-        for (int i=0; i<n_particles; i++) {
-            particle_t *pi = &particles[i];
-            const float fgrav_x = Gx * MASS / pi->rho;
-            const float fgrav_y = Gy * MASS / pi->rho;
-            pi->fx = fpress_x[i] + fvisc_x[i] + fgrav_x;
-            pi->fy = fpress_y[i] + fvisc_y[i] + fgrav_y;
-        }
+        const float fgrav_x = Gx * MASS / pi->rho;
+        const float fgrav_y = Gy * MASS / pi->rho;
+        pi->fx = fpress_x + fvisc_x + fgrav_x;
+        pi->fy = fpress_y + fvisc_y + fgrav_y;
     }
 }
 
@@ -300,7 +265,6 @@ void update( void )
     integrate();
 }
 
-
 int main(int argc, char **argv)
 {
     srand(1234);
@@ -328,8 +292,16 @@ int main(int argc, char **argv)
                 fprintf(stderr, "Usage: %s [-p number of particles] [-s number of steps] [-q]\n", argv[0]);
                 return EXIT_FAILURE;
         }
-    } 
-    
+    }
+ 
+   if (argc > 1) {
+        n = atoi(argv[1]);
+    }
+
+    if (argc > 2) {
+        nsteps = atoi(argv[2]);
+    }
+
     if (n > MAX_PARTICLES) {
         fprintf(stderr, "FATAL: the maximum number of particles is %d\n", MAX_PARTICLES);
         return EXIT_FAILURE;

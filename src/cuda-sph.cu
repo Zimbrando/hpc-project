@@ -378,7 +378,16 @@ int main(int argc, char **argv)
                 return EXIT_FAILURE;
         }
     }
+ 
+   if (argc > 1) {
+        n = atoi(argv[1]);
+    }
 
+    if (argc > 2) {
+        nsteps = atoi(argv[2]);
+    }
+
+ 
     if (n > MAX_PARTICLES) {
         fprintf(stderr, "FATAL: the maximum number of particles is %d\n", MAX_PARTICLES);
         return EXIT_FAILURE;
