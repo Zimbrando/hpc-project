@@ -27,7 +27,13 @@
  * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
  * SOFTWARE.
  *
- ****************************************************************************/
+****************************************************************************/
+
+/* HPC - Assignment 2022/2023
+   Marco Sternini - marco.sternini2@studio.unibo.it
+   0000971418
+*/
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <math.h>

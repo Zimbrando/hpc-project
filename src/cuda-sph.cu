@@ -201,7 +201,8 @@ __global__ void k_avg_velocities( particles_t *ps, int n, float* o_result )
         s_results[lind] = hypotf(ps->vx[gind], ps->vy[gind]) / n;
     }
     __syncthreads();
-   
+
+/* https://developer.download.nvidia.com/assets/cuda/files/reduction.pdf Reduction#3 Sequential addressing */
     for (unsigned int s=blockDim.x/2; s>0; s/=2) {
         if (lind < s) {
             s_results[lind] += s_results[lind + s];
